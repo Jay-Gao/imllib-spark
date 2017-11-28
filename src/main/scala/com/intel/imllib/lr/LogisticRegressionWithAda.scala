@@ -17,7 +17,7 @@
 
 package com.intel.imllib.lr
 
-import com.intel.imllib.optimization.{AdaGradientDescent, AdamUpdater}
+import com.intel.imllib.optimization.{AdaGradientDescent, MomentumUpdater}
 import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.mllib.optimization._
@@ -31,19 +31,15 @@ import org.apache.spark.rdd.RDD
  */
 
 class LogisticRegressionWithAda (
-                                                 private var stepSize: Double,
                                                  private var numIterations: Int,
-                                                 private var regParam: Double,
                                                  private var miniBatchFraction: Double)
   extends GeneralizedLinearAlgorithm[LogisticRegressionModel] with Serializable {
 
   private val gradient = new LogisticGradient()
-  private val updater = new AdamUpdater()
+  private val updater = new MomentumUpdater(0.01, 0.9)
 
   override val  optimizer = new AdaGradientDescent(gradient, updater)
-    .setStepSize(stepSize)
     .setNumIterations(numIterations)
-    .setRegParam(regParam)
     .setMiniBatchFraction(miniBatchFraction)
 
   override protected val validators = List(DataValidators.binaryLabelValidator)
@@ -52,7 +48,7 @@ class LogisticRegressionWithAda (
     * Construct a LogisticRegression object with default parameters: {stepSize: 1.0,
     * numIterations: 100, regParm: 0.01, miniBatchFraction: 1.0}.
     */
-  def this() = this(1.0, 100, 0.01, 1.0)
+  def this() = this(100, 1.0)
 
   def createModel(weights: Vector, intercept: Double) = {
     new LogisticRegressionModel(weights, intercept)
@@ -76,7 +72,6 @@ object LogisticRegressionWithAda {
     *
     * @param input RDD of (label, array of features) pairs.
     * @param numIterations Number of iterations of gradient descent to run.
-    * @param stepSize Step size to be used for each iteration of gradient descent.
     * @param miniBatchFraction Fraction of data to be used per iteration.
     * @param initialWeights Initial set of weights to be used. Array should be equal in size to
     *        the number of features in the data.
@@ -84,10 +79,9 @@ object LogisticRegressionWithAda {
   def train(
              input: RDD[LabeledPoint],
              numIterations: Int,
-             stepSize: Double,
              miniBatchFraction: Double,
              initialWeights: Vector): LogisticRegressionModel = {
-    new LogisticRegressionWithAda(stepSize, numIterations, 0.0, miniBatchFraction)
+    new LogisticRegressionWithAda(numIterations, miniBatchFraction)
       .run(input, initialWeights)
   }
 
@@ -99,16 +93,13 @@ object LogisticRegressionWithAda {
     *
     * @param input RDD of (label, array of features) pairs.
     * @param numIterations Number of iterations of gradient descent to run.
-    * @param stepSize Step size to be used for each iteration of gradient descent.
-
     * @param miniBatchFraction Fraction of data to be used per iteration.
     */
   def train(
              input: RDD[LabeledPoint],
              numIterations: Int,
-             stepSize: Double,
              miniBatchFraction: Double): LogisticRegressionModel = {
-    new LogisticRegressionWithAda(stepSize, numIterations, 0.0, miniBatchFraction)
+    new LogisticRegressionWithAda(numIterations, miniBatchFraction)
       .run(input)
   }
 
@@ -119,32 +110,14 @@ object LogisticRegressionWithAda {
     * NOTE: Labels used in Logistic Regression should be {0, 1}
     *
     * @param input RDD of (label, array of features) pairs.
-    * @param stepSize Step size to be used for each iteration of Gradient Descent.
 
-    * @param numIterations Number of iterations of gradient descent to run.
-    * @return a LogisticRegressionModel which has the weights and offset from training.
-    */
-  def train(
-             input: RDD[LabeledPoint],
-             numIterations: Int,
-             stepSize: Double): LogisticRegressionModel = {
-    train(input, numIterations, stepSize, 1.0)
-  }
-
-  /**
-    * Train a logistic regression model given an RDD of (label, features) pairs. We run a fixed
-    * number of iterations of gradient descent using a step size of 1.0. We use the entire data set
-    * to update the gradient in each iteration.
-    * NOTE: Labels used in Logistic Regression should be {0, 1}
-    *
-    * @param input RDD of (label, array of features) pairs.
     * @param numIterations Number of iterations of gradient descent to run.
     * @return a LogisticRegressionModel which has the weights and offset from training.
     */
   def train(
              input: RDD[LabeledPoint],
              numIterations: Int): LogisticRegressionModel = {
-    train(input, numIterations, 1.0, 1.0)
+    train(input, numIterations, 1.0)
   }
 }
 

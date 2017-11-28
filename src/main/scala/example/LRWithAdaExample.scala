@@ -12,17 +12,16 @@ object LRWithAdaExample extends App {
   override def main(args: Array[String]): Unit = {
 
     val sc = new SparkContext(new SparkConf().setAppName("TESTADAOPTIMIZER"))
+		sc.setLogLevel("WARN")
     val training = MLUtils.loadLibSVMFile(sc, args(0)).repartition(args(2).toInt)
     val testing = MLUtils.loadLibSVMFile(sc, args(1))
     val lr = new LogisticRegressionWithAda().setIntercept(false)
 //    Array(new AdagradUpdater, new AdamUpdater).foreach{ updater =>
-		Array(new MomentumUpdater()).foreach{ updater =>
+		Array(new MomentumUpdater(0.1)).foreach{ updater =>
       lr.optimizer
-        .setRegParam(0.0)
         .setNumIterations(100)
         .setConvergenceTol(0.0005)
         .setUpdater(updater)
-        .setStepSize(0.1)
 
       val currentTime = System.currentTimeMillis()
       val model = lr.run(training)

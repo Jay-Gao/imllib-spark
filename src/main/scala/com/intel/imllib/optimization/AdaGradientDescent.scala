@@ -34,25 +34,12 @@ import com.intel.imllib.util.vectorUtils._
   * @param gradient Gradient function to be used.
   * @param updater Updater to be used to update weights after every iteration.
   */
-class AdaGradientDescent ( private var gradient: Gradient, private var updater: AdaUpdater)
+class AdaGradientDescent ( private var gradient: Gradient, private var updater: Updater)
   extends Optimizer {
 
-  private var learningRate: Double = 1.0
   private var numIterations: Int = 100
-  private var regParam: Double = 0.0
   private var miniBatchFraction: Double = 1.0
   private var convergenceTol: Double = 0.001
-
-  /**
-    * Set the initial step size for the first step. Default 1.0.
-    * In subsequent steps, the step size will decrease with learningRate/sqrt(t)
-    */
-  def setStepSize(step: Double): this.type = {
-    require(step > 0,
-      s"Initial step size must be positive but got ${step}")
-    this.learningRate = step
-    this
-  }
 
   /**
     * Set fraction of data to be used for each iteration.
@@ -72,16 +59,6 @@ class AdaGradientDescent ( private var gradient: Gradient, private var updater: 
     require(iters >= 0,
       s"Number of iterations must be nonnegative but got ${iters}")
     this.numIterations = iters
-    this
-  }
-
-  /**
-    * Set the regularization parameter. Default 0.0.
-    */
-  def setRegParam(regParam: Double): this.type = {
-    require(regParam >= 0,
-      s"Regularization parameter must be nonnegative but got ${regParam}")
-    this.regParam = regParam
     this
   }
 
@@ -119,7 +96,7 @@ class AdaGradientDescent ( private var gradient: Gradient, private var updater: 
     * The updater is responsible to perform the update from the regularization term as well,
     * and therefore determines what kind or regularization is used, if any.
     */
-  def setUpdater(updater: AdaUpdater): this.type = {
+  def setUpdater(updater: Updater): this.type = {
     this.updater = updater
     this
   }
@@ -136,11 +113,9 @@ class AdaGradientDescent ( private var gradient: Gradient, private var updater: 
   def optimize(data: RDD[(Double, Vector)], initialWeights: Vector): Vector = {
     val (weights, _) = AdaGradientDescent.runMiniBatch(
       data,
-      gradient,
+			gradient,
       updater,
-      learningRate,
       numIterations,
-      regParam,
       miniBatchFraction,
       initialWeights,
       convergenceTol)
@@ -167,9 +142,7 @@ object AdaGradientDescent {
    * @param gradient Gradient object (used to compute the gradient of the loss function of
    *                 one single data example)
    * @param updater Updater function to actually perform a gradient step in a given direction.
-   * @param learningRate initial step size for the first step
    * @param numIterations number of iterations.
-   * @param regParam regularization parameter
    * @param miniBatchFraction fraction of the input data set that should be used for
    *                          one iteration. Default value 1.0.
    * @param convergenceTol Minibatch iteration will end before numIterations if the relative
@@ -183,10 +156,8 @@ object AdaGradientDescent {
   def runMiniBatch(
                        data: RDD[(Double, Vector)],
                        gradient: Gradient,
-                       updater: AdaUpdater,
-                       learningRate: Double,
+											 updater: Updater,
                        numIterations: Int,
-                       regParam: Double,
                        miniBatchFraction: Double,
                        initialWeights: Vector,
                        convergenceTol: Double): (Vector, Array[Double]) = {
@@ -222,13 +193,16 @@ object AdaGradientDescent {
     // Initialize weights as a column vector
     var weights: Vector = Vectors.dense(initialWeights.toArray)
     val n = weights.size
+		var updater_ = updater match {
+			case _: MomentumUpdater =>
+				updater.asInstanceOf[MomentumUpdater].initializeMomentum(n)
+		}
+//    var m = Vectors.zeros(n)
+//    var v = Vectors.zeros(n)
+//    var beta1Pow = 1.0
+//    var beta2Pow = 1.0
 
-    var m = Vectors.zeros(n)
-    var v = Vectors.zeros(n)
-    var beta1Pow = 1.0
-    var beta2Pow = 1.0
-
-    var accum = Vectors.zeros(n)
+//    var accum = Vectors.zeros(n)
     var regVal = 0.0
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
@@ -257,30 +231,11 @@ object AdaGradientDescent {
         stochasticLossHistory += lossSum / miniBatchSize + regVal
 
         updater match {
-          case _: AdamUpdater =>
-            val update = updater.asInstanceOf[AdamUpdater].compute(
-              weights, fromBreeze(gradientSum / miniBatchSize.toDouble),
-              m, v, beta1Pow, beta2Pow, i, regParam)
-            weights = update._1
-            m = update._2
-            v = update._3
-            beta1Pow = update._4
-            beta2Pow = update._5
-            regVal = update._6
-          case _: AdagradUpdater =>
-            val update = updater.asInstanceOf[AdagradUpdater].compute(
-              weights, fromBreeze(gradientSum / miniBatchSize.toDouble),
-              accum, learningRate, i, regParam)
-            weights = update._1
-            accum = update._2
-            regVal = update._3
 					case _: MomentumUpdater =>
-						val update = updater.asInstanceOf[MomentumUpdater].compute(
-							weights, fromBreeze(gradientSum / miniBatchSize.toDouble),
-							accum, learningRate, i, regParam)
+						val update = updater_.compute(
+							weights, fromBreeze(gradientSum / miniBatchSize.toDouble))
 						weights = update._1
-						accum = update._2
-						regVal = update._3
+						regVal = update._2
         }
 
         previousWeights = currentWeights
@@ -308,14 +263,12 @@ object AdaGradientDescent {
   def runMiniBatch(
                        data: RDD[(Double, Vector)],
                        gradient: Gradient,
-                       updater: AdaUpdater,
-                       learningRate: Double,
+                       updater: Updater,
                        numIterations: Int,
-                       regParam: Double,
                        miniBatchFraction: Double,
                        initialWeights: Vector): (Vector, Array[Double]) =
-    AdaGradientDescent.runMiniBatch(data, gradient, updater, learningRate, numIterations,
-      regParam, miniBatchFraction, initialWeights, 0.001)
+    AdaGradientDescent.runMiniBatch(data, gradient, updater, numIterations,
+			miniBatchFraction, initialWeights, 0.001)
 
 
   private def isConverged(
