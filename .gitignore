@@ -3,3 +3,5 @@ project/target/
 bin/*.sh
 *.swp
 *.tmp
+.idea/*
+project/build.properties

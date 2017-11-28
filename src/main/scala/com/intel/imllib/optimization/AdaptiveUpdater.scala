@@ -78,3 +78,32 @@ class AdagradUpdater extends AdaUpdater {
     (fromBreeze(Weights), fromBreeze(accum), 0)
   }
 }
+
+/**
+	* :: DeveloperApi ::
+	* A simple momentum updater for gradient descent with l2 regularization.
+	* Uses a step-size decreasing with the square root of the number of iterations.
+	* v = v * gamma + grad * lr
+	* w = w - v
+	*/
+@DeveloperApi
+class MomentumUpdater(gamma: Double) extends AdaUpdater {
+
+	def this() = this(0.9)
+
+	def compute(
+						 	weightsOld: Vector,
+							gradient: Vector,
+							accumMomentum: Vector,
+							learningRate: Double,
+							iter: Int,
+							regParam: Double
+						 ): (Vector, Vector, Double) = {
+		require(regParam >= 0., "L2 regularization parameter must be greater than or equals 0.")
+		val actualGradient = toBreeze(gradient) + toBreeze(weightsOld) * regParam
+		val accum = toBreeze(accumMomentum) * gamma + actualGradient * learningRate
+		val weights = toBreeze(weightsOld) - accum
+		val regLoss = 0.5 * regParam * (toBreeze(weightsOld) :* toBreeze(weightsOld)).sum
+		(fromBreeze(weights), fromBreeze(accum), regLoss)
+	}
+}

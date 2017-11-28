@@ -274,6 +274,13 @@ object AdaGradientDescent {
             weights = update._1
             accum = update._2
             regVal = update._3
+					case _: MomentumUpdater =>
+						val update = updater.asInstanceOf[MomentumUpdater].compute(
+							weights, fromBreeze(gradientSum / miniBatchSize.toDouble),
+							accum, learningRate, i, regParam)
+						weights = update._1
+						accum = update._2
+						regVal = update._3
         }
 
         previousWeights = currentWeights

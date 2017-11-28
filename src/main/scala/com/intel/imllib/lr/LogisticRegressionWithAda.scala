@@ -40,7 +40,7 @@ class LogisticRegressionWithAda (
   private val gradient = new LogisticGradient()
   private val updater = new AdamUpdater()
 
-  override val optimizer = new AdaGradientDescent(gradient, updater)
+  override val  optimizer = new AdaGradientDescent(gradient, updater)
     .setStepSize(stepSize)
     .setNumIterations(numIterations)
     .setRegParam(regParam)
