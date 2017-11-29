@@ -1,5 +1,5 @@
 import com.intel.imllib.lr.LogisticRegressionWithAda
-import com.intel.imllib.optimization.{AdagradUpdater, AdamUpdater, MomentumUpdater}
+import com.intel.imllib.optimization._
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.mllib.evaluation.MulticlassMetrics
 import org.apache.spark.mllib.regression._
@@ -17,7 +17,8 @@ object LRWithAdaExample extends App {
     val testing = MLUtils.loadLibSVMFile(sc, args(1))
     val lr = new LogisticRegressionWithAda().setIntercept(false)
 //    Array(new AdagradUpdater, new AdamUpdater).foreach{ updater =>
-		Array(new MomentumUpdater(0.1)).foreach{ updater =>
+		Array(new MomentumUpdater(0.1), new AdagradUpdater(0.1), new SimpleUpdater(0.1),
+			new RMSPropUpdater(0.1, 0.99, 0.01), new AdamUpdater(0.1)).foreach{ updater =>
       lr.optimizer
         .setNumIterations(100)
         .setConvergenceTol(0.0005)

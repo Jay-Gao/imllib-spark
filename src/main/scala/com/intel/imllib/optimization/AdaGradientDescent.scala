@@ -194,15 +194,18 @@ object AdaGradientDescent {
     var weights: Vector = Vectors.dense(initialWeights.toArray)
     val n = weights.size
 		var updater_ = updater match {
+			case _: SimpleUpdater =>
+				updater.asInstanceOf[SimpleUpdater]
 			case _: MomentumUpdater =>
 				updater.asInstanceOf[MomentumUpdater].initializeMomentum(n)
+			case _: AdagradUpdater =>
+				updater.asInstanceOf[AdagradUpdater].initializeSquare(n)
+			case _: RMSPropUpdater =>
+				updater.asInstanceOf[RMSPropUpdater].initializeSquare(n)
+			case _: AdamUpdater =>
+				updater.asInstanceOf[AdamUpdater].initialMomentum(n).initialSquare(n)
 		}
-//    var m = Vectors.zeros(n)
-//    var v = Vectors.zeros(n)
-//    var beta1Pow = 1.0
-//    var beta2Pow = 1.0
 
-//    var accum = Vectors.zeros(n)
     var regVal = 0.0
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
@@ -229,18 +232,14 @@ object AdaGradientDescent {
           * and regVal is the regularization value computed in the previous iteration as well.
           */
         stochasticLossHistory += lossSum / miniBatchSize + regVal
-
-        updater match {
-					case _: MomentumUpdater =>
-						val update = updater_.compute(
-							weights, fromBreeze(gradientSum / miniBatchSize.toDouble))
-						weights = update._1
-						regVal = update._2
-        }
+				// compute updates.
+				val update = updater_.compute(weights, fromBreeze(gradientSum / miniBatchSize.toDouble), i)
+				weights = update._1
+				regVal = update._2
 
         previousWeights = currentWeights
         currentWeights = Some(weights)
-        if (previousWeights != None && currentWeights != None) {
+        if (previousWeights.isDefined && currentWeights.isDefined) {
           converged = isConverged(previousWeights.get,
             currentWeights.get, convergenceTol)
         }

@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 $SPARK_HOME/bin/spark-submit \
     --class LRWithAdaExample \
     --master local[*] \
