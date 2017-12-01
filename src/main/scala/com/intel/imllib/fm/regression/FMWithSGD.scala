@@ -21,10 +21,11 @@ import org.apache.spark.mllib.regression._
 
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.linalg.{DenseMatrix, Vector, Vectors}
-import org.apache.spark.mllib.optimization.Updater
+//import org.apache.spark.mllib.optimization.Updater
 import org.apache.spark.rdd.RDD
 
 import com.intel.imllib.fm.optimization.GradientDescentFM
+import com.intel.imllib.optimization._
 
 import scala.util.Random
 
@@ -240,8 +241,9 @@ class FMWithSGD(private var task: Int,
 
     val gradient = new FMGradient(task, k0, k1, k2, numFeatures, minLabel, maxLabel, r0, r1, r2)
 
-    val updater = new FMUpdater
+//    val updater = new FMUpdater
 
+		val updater = new MomentumUpdater(0.1, 0.9)
     val optimizer = new GradientDescentFM(gradient, updater)
       .setStepSize(stepSize)
       .setNumIterations(numIterations)

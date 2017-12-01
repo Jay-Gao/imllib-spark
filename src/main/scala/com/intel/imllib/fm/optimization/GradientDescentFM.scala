@@ -20,11 +20,14 @@ package com.intel.imllib.fm.optimization
 import scala.collection.mutable.ArrayBuffer
 import breeze.linalg.{DenseVector => BDV}
 import org.apache.spark.annotation.{DeveloperApi, Experimental}
-import org.apache.spark.mllib.optimization._
+import org.apache.spark.mllib.optimization.{Gradient, Optimizer}
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.rdd.RDD
 import com.intel.imllib.fm.regression.FMGradient
+import com.intel.imllib.optimization.AdaGradientDescent.{log}
+import com.intel.imllib.util.isConverged
 import com.intel.imllib.util.vectorUtils._
+import com.intel.imllib.optimization._
 
 /**
   * Class used to solve an optimization problem using Gradient Descent.
@@ -40,7 +43,7 @@ class GradientDescentFM(private var gradient: Gradient, private var updater: Upd
   private var regParam: Double = 0.0
   private var miniBatchFraction: Double = 1.0
   private var convergenceTol: Double = 0.001
-
+	this.updater.setRegParam(0)
   /**
    * Set the initial step size of SGD for the first step. Default 1.0.
    * In subsequent steps, the step size will decrease with stepSize/sqrt(t)
@@ -227,28 +230,79 @@ object GradientDescentFM {
     val n = weights.size
     val slices = data.getNumPartitions
 
+		var updater_ = updater match {
+			case _: SimpleUpdater =>
+				updater.asInstanceOf[SimpleUpdater]
+			case _: MomentumUpdater =>
+				updater.asInstanceOf[MomentumUpdater].initializeMomentum(n)
+			case _: AdagradUpdater =>
+				updater.asInstanceOf[AdagradUpdater].initializeSquare(n)
+			case _: RMSPropUpdater =>
+				updater.asInstanceOf[RMSPropUpdater].initializeSquare(n)
+			case _: AdamUpdater =>
+				updater.asInstanceOf[AdamUpdater].initialMomentum(n).initialSquare(n)
+		}
 
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
-    while (!converged && i <= numIterations) {
-      val bcWeights = data.context.broadcast(weights)
-      // Sample a subset (fraction miniBatchFraction) of the total data
-      // compute and sum up the subgradients on this subset (this is one map-reduce)
-      val wSum = data.treeAggregate(BDV(bcWeights.value.toArray))(
-        seqOp = (c, v) => {
-          gradient.asInstanceOf[FMGradient].computeFM(v._2, v._1, fromBreeze(c), stepSize, i, regParam)
-        },
-        combOp = (c1, c2) => {
-          c1 + c2
-        }, 7)
+		// update weights with updater
+		while (!converged && i <= numIterations) {
+			val bcWeights = data.context.broadcast(weights)
+			// Sample a subset (fraction miniBatchFraction) of the total data
+			// compute and sum up the subgradients on this subset (this is one map-reduce)
+			val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
+				.treeAggregate((BDV.zeros[Double](n), 0.0, 0L))(
+					seqOp = (c, v) => {
+						// c: (grad, loss, count), v: (label, features)
+						val (grad, loss) = gradient.compute(v._2, v._1, bcWeights.value)
+						(c._1 + toBreeze(grad), c._2 + loss, c._3 + 1)
+					},
+					combOp = (c1, c2) => {
+						// c: (grad, loss, count)
+						(c1._1 + c2._1, c1._2 + c2._2, c1._3 + c2._3)
+					})
 
-      weights = Vectors.dense(wSum.toArray.map(_ / slices))
+			if (miniBatchSize > 0) {
+				/**
+					* lossSum is computed using the weights from the previous iteration
+					* and regVal is the regularization value computed in the previous iteration as well.
+					*/
+				stochasticLossHistory += lossSum / miniBatchSize
+				// compute updates.
+				val update = updater_.compute(weights, fromBreeze(gradientSum / miniBatchSize.toDouble), i)
+				weights = update._1
 
-      i += 1
-    }
+				previousWeights = currentWeights
+				currentWeights = Some(weights)
+				if (previousWeights.isDefined && currentWeights.isDefined) {
+					converged = isConverged(previousWeights.get,
+						currentWeights.get, convergenceTol)
+//				}
+			} else {
+				log.warn(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
+			}
+			i += 1
+		}
+
+
+//    while (!converged && i <= numIterations) {
+//      val bcWeights = data.context.broadcast(weights)
+//      // Sample a subset (fraction miniBatchFraction) of the total data
+//      // compute and sum up the subgradients on this subset (this is one map-reduce)
+//      val wSum = data.treeAggregate(BDV(bcWeights.value.toArray))(
+//        seqOp = (c, v) => {
+//          gradient.asInstanceOf[FMGradient].computeFM(v._2, v._1, fromBreeze(c), stepSize, i, regParam)
+//        },
+//        combOp = (c1, c2) => {
+//          c1 + c2
+//        }, 7)
+//
+//      weights = Vectors.dense(wSum.toArray.map(_ / slices))
+//
+//      i += 1
+//    }
 
     (weights, stochasticLossHistory.toArray)
-
   }
 
 }

@@ -28,6 +28,9 @@ import org.apache.spark.sql.{DataFrame, SQLContext}
 import breeze.linalg.{DenseVector => BDV}
 import com.intel.imllib.util.Loader._
 import com.intel.imllib.util.{Loader, Saveable}
+import com.intel.imllib.util.vectorUtils._
+
+import scala.math.Numeric.DoubleAsIfIntegral
 
 
 /**
@@ -180,7 +183,6 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
                  val r0: Double, val r1: Double, val r2: Double) extends Gradient {
 
   private def predict(data: Vector, weights: Vector): (Double, Array[Double]) = {
-
     var pred = if (k0) weights(weights.size - 1) else 0.0
 
     if (k1) {
@@ -211,8 +213,47 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
   }
 
   override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
-    throw new Exception("This part is merged into computeFM()")
+//    throw new Exception("This part is merged into computeFM()")
+		val (pred, sum) = predict(data, weights)
+		val mult = task match {
+			case 0 =>
+				pred - label
+			case 1 =>
+				-label * (1.0 - 1.0 / (1.0 + Math.exp(-label * pred)))
+		}
+		val len = weights.size
+		val gradients = new Array[Double](len)
+		if (k0) {
+			gradients(len - 1) = mult + r0 * weights(len - 1)
+		}
+		if (k1) {
+			val pos = numFeatures * k2
+			data.foreachActive {
+				case (i, v) =>
+					gradients(pos + i) = v * mult + r1 * weights(pos + i)
+			}
+		}
+		data.foreachActive {
+			case (i, v) =>
+				val pos = i * k2
+				for ( f <- 0 until k2) {
+					gradients(pos + i) = (sum(f) * v - weights(pos + f) * v * v) *  mult + r2 * weights(pos + f)
+				}
+		}
+		val weights_ = toBreeze(weights)
+		val regLoss0 = if (k0) r0 * weights_(-1) * weights_(-1) else 0
+		val regLoss1 = if (k1) r1 * weights_(numFeatures * k2 until -1).dot(weights_(numFeatures * k2 until -1)) else 0
+		val regLoss2 = 0.5 * r2 * weights_(0 until numFeatures * k2).dot(weights_(0 until numFeatures * k2))
+		val regLoss = regLoss0 + regLoss1 + regLoss2
+		val loss = task match {
+			case 0 =>
+				0.5 * (pred - label) * (pred - label) + regLoss
+			case 1 =>
+				math.log(1 + math.exp(-label * pred))
+		}
+		(Vectors.dense(gradients), loss)
   }
+
 
   override def compute(data: Vector, label: Double, weights: Vector, cumGradient: Vector): Double = {
     throw new Exception("This part is merged into computeFM()")

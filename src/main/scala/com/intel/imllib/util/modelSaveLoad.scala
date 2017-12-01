@@ -25,6 +25,7 @@ import org.apache.spark.SparkContext
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.types._
+import org.apache.spark.mllib.linalg.Vector
 
 /**
  * :: DeveloperApi ::
