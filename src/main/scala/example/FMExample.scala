@@ -21,12 +21,15 @@ import org.apache.spark.mllib.regression._
 import org.apache.spark.rdd.RDD
 
 import com.intel.imllib.fm.regression._
+import com.intel.imllib.fm_.optimization._
+import com.intel.imllib.optimization._
 
 object FMExample extends App {
 
   override def main(args: Array[String]): Unit = {
 
     val sc = new SparkContext(new SparkConf().setAppName("FMExample"))
+		sc.setLogLevel("WARN")
 
     if (args.length != 6) {
       println("FMExample <train_file> <partitions> <n_iters> <stepSize> <k> <model_file>")
@@ -52,18 +55,22 @@ object FMExample extends App {
     
     val splits = data.randomSplit(Array(0.8, 0.2))
     val (training, testing) = (splits(0), splits(1))
-   
-    val fm1: FMModel = FMWithSGD.train(training, task = 1, numIterations
-      = args(2).toInt, stepSize = args(3).toDouble, dim = (false, true, args(4).toInt), regParam = (0, 0.0, 0.01), initStd = 0.01)
 
-    val scores: RDD[(Int, Int)] = fm1.predict(testing.map(_.features)).map(x => if(x >= 0.5) 1 else -1).zip(testing.map(_.label.toInt))
-    val accuracy = scores.filter(x => x._1 == x._2).count().toDouble / scores.count()
+		val trainer = new FMTrainer(task = 1, dim = (true, false, args(4).toInt), regParams = (0, 0.0, 0.01)).setInitStd(0.01)
+		Array(new MomentumUpdater(0.1)).foreach {
+//		Array(new SimpleUpdater(0.1), new MomentumUpdater(0.1, 0.9), new AdagradUpdater(0.1)).foreach {
+			updater =>
+				trainer.optimizer
+					.setUpdater(updater.setRegParam(0.0))
+			  	.setNumIterations(5)
+			  	.setMiniBatchFraction(0.5)
 
-    println(s"accuracy = $accuracy")
-
-    fm1.save(sc, args(5))
-    val loadmodel = FMModel.load(sc, args(5))
-
+				val model = trainer.train(training)
+				val scores: RDD[(Int, Int)] = model.predict(testing.map(_.features)).map(x => if(x >= 0.5) 1 else -1).zip(testing.map(_.label.toInt))
+				val accuracy = scores.filter(x => x._1 == x._2).count().toDouble / scores.count()
+				println(s"accuracy = $accuracy")
+				model.save(sc, "data/fm1")
+		}
     sc.stop()
   }
 }

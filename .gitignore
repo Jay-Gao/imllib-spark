@@ -1,5 +1,6 @@
 target/
 project/target/
+data/*
 bin/*.sh
 *.swp
 *.tmp

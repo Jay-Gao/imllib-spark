@@ -22,13 +22,14 @@ import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg._
-import org.apache.spark.mllib.optimization.{Gradient, Updater}
+import org.apache.spark.mllib.optimization.{Gradient, Updater, Optimizer}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, SQLContext}
 import breeze.linalg.{DenseVector => BDV}
 import com.intel.imllib.util.Loader._
 import com.intel.imllib.util.{Loader, Saveable}
 import com.intel.imllib.util.vectorUtils._
+import java.io.PrintWriter
 
 import scala.math.Numeric.DoubleAsIfIntegral
 
@@ -122,6 +123,20 @@ object FMModel extends Loader[FMModel] {
       // Create Parquet data.
       val dataRDD: DataFrame = sc.parallelize(Seq(data), 1).toDF()
       dataRDD.write.parquet(dataPath(path))
+
+			val out = new PrintWriter(s"$path/weights")
+			val intercept = data.intercept
+			val weightVector = data.weightVector
+			val factorMatrix = data.factorMatrix
+			out.println("intercept")
+			out.println(intercept)
+			if (weightVector.isDefined) {
+				out.println("weight vector")
+				weightVector.get.toArray.foreach(x => out.println(x))
+			}
+			out.println("factor weights")
+			factorMatrix.transpose.rowIter.foreach(x => out.println(x.toArray.mkString(",")))
+			out.close()
     }
 
     def load(sc: SparkContext, path: String): FMModel = {
@@ -296,20 +311,5 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
     }
 
     BDV(weightsArray)
-  }
-}
-
-/**
-  *
-  */
-class FMUpdater() extends Updater {
-
-  override def compute(
-               weightsOld: Vector,
-               gradient: Vector,
-               stepSize: Double,
-               iter: Int,
-               regParam: Double): (Vector, Double) = {
-    throw new Exception("This part is merged into Gradient()")
   }
 }

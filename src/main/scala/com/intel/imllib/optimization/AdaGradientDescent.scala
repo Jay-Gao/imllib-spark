@@ -25,7 +25,7 @@ import org.apache.spark.mllib.optimization.{Gradient, Optimizer}
 import org.apache.spark.rdd.RDD
 
 import scala.collection.mutable.ArrayBuffer
-
+import com.intel.imllib.util._
 import com.intel.imllib.util.vectorUtils._
 
 /**

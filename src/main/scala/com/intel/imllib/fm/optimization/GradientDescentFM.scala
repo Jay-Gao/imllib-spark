@@ -24,10 +24,10 @@ import org.apache.spark.mllib.optimization.{Gradient, Optimizer}
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.rdd.RDD
 import com.intel.imllib.fm.regression.FMGradient
-import com.intel.imllib.optimization.AdaGradientDescent.{log}
 import com.intel.imllib.util.isConverged
 import com.intel.imllib.util.vectorUtils._
 import com.intel.imllib.optimization._
+import org.apache.log4j.Logger
 
 /**
   * Class used to solve an optimization problem using Gradient Descent.
@@ -159,7 +159,7 @@ class GradientDescentFM(private var gradient: Gradient, private var updater: Upd
  */
 @DeveloperApi
 object GradientDescentFM {
-
+	@transient lazy val log = Logger.getLogger(getClass.getName)
   /**
    * Run stochastic gradient descent (SGD) in parallel using mini batches.
    * In each iteration, we sample a subset (fraction miniBatchFraction) of the total data
@@ -196,39 +196,39 @@ object GradientDescentFM {
       initialWeights: Vector,
       convergenceTol: Double): (Vector, Array[Double]) = {
 
-    // convergenceTol should be set with non minibatch settings
-    if (miniBatchFraction < 1.0 && convergenceTol > 0.0) {
-      println("Testing against a convergenceTol when using miniBatchFraction " +
-        "< 1.0 can be unstable because of the stochasticity in sampling.")
-    }
+		// convergenceTol should be set with non minibatch settings
+		if (miniBatchFraction < 1.0 && convergenceTol > 0.0) {
+			println("Testing against a convergenceTol when using miniBatchFraction " +
+				"< 1.0 can be unstable because of the stochasticity in sampling.")
+		}
 
-    if (numIterations * miniBatchFraction < 1.0) {
-      println("Not all examples will be used if numIterations * miniBatchFraction < 1.0: " +
-        s"numIterations=$numIterations and miniBatchFraction=$miniBatchFraction")
-    }
+		if (numIterations * miniBatchFraction < 1.0) {
+			println("Not all examples will be used if numIterations * miniBatchFraction < 1.0: " +
+				s"numIterations=$numIterations and miniBatchFraction=$miniBatchFraction")
+		}
 
-    val stochasticLossHistory = new ArrayBuffer[Double](numIterations)
-    // Record previous weight and current one to calculate solution vector difference
+		val stochasticLossHistory = new ArrayBuffer[Double](numIterations)
+		// Record previous weight and current one to calculate solution vector difference
 
-    var previousWeights: Option[Vector] = None
-    var currentWeights: Option[Vector] = None
+		var previousWeights: Option[Vector] = None
+		var currentWeights: Option[Vector] = None
 
-    val numExamples = data.count()
+		val numExamples = data.count()
 
-    // if no data, return initial weights to avoid NaNs
-    if (numExamples == 0) {
-      println("GradientDescent.runMiniBatchSGD returning initial weights, no data found")
-      return (initialWeights, stochasticLossHistory.toArray)
-    }
+		// if no data, return initial weights to avoid NaNs
+		if (numExamples == 0) {
+			println("GradientDescent.runMiniBatchSGD returning initial weights, no data found")
+			return (initialWeights, stochasticLossHistory.toArray)
+		}
 
-    if (numExamples * miniBatchFraction < 1) {
-      println("The miniBatchFraction is too small")
-    }
+		if (numExamples * miniBatchFraction < 1) {
+			println("The miniBatchFraction is too small")
+		}
 
-    // Initialize weights as a column vector
-    var weights = Vectors.dense(initialWeights.toArray)
-    val n = weights.size
-    val slices = data.getNumPartitions
+		// Initialize weights as a column vector
+		var weights = Vectors.dense(initialWeights.toArray)
+		val n = weights.size
+		val slices = data.getNumPartitions
 
 		var updater_ = updater match {
 			case _: SimpleUpdater =>
@@ -243,8 +243,8 @@ object GradientDescentFM {
 				updater.asInstanceOf[AdamUpdater].initialMomentum(n).initialSquare(n)
 		}
 
-    var converged = false // indicates whether converged based on convergenceTol
-    var i = 1
+		var converged = false // indicates whether converged based on convergenceTol
+		var i = 1
 		// update weights with updater
 		while (!converged && i <= numIterations) {
 			val bcWeights = data.context.broadcast(weights)
@@ -267,6 +267,7 @@ object GradientDescentFM {
 					* lossSum is computed using the weights from the previous iteration
 					* and regVal is the regularization value computed in the previous iteration as well.
 					*/
+				println(s"iter: $i, batch size: $miniBatchSize, avgloss: ${lossSum / miniBatchSize}")
 				stochasticLossHistory += lossSum / miniBatchSize
 				// compute updates.
 				val update = updater_.compute(weights, fromBreeze(gradientSum / miniBatchSize.toDouble), i)
@@ -277,32 +278,30 @@ object GradientDescentFM {
 				if (previousWeights.isDefined && currentWeights.isDefined) {
 					converged = isConverged(previousWeights.get,
 						currentWeights.get, convergenceTol)
-//				}
+				}
 			} else {
 				log.warn(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
 			}
+
+
+			//    while (!converged && i <= numIterations) {
+			//      val bcWeights = data.context.broadcast(weights)
+			//      // Sample a subset (fraction miniBatchFraction) of the total data
+			//      // compute and sum up the subgradients on this subset (this is one map-reduce)
+			//      val wSum = data.treeAggregate(BDV(bcWeights.value.toArray))(
+			//        seqOp = (c, v) => {
+			//          gradient.asInstanceOf[FMGradient].computeFM(v._2, v._1, fromBreeze(c), stepSize, i, regParam)
+			//        },
+			//        combOp = (c1, c2) => {
+			//          c1 + c2
+			//        }, 7)
+			//
+			//      weights = Vectors.dense(wSum.toArray.map(_ / slices))
+			//
+			//      i += 1
+			//    }
 			i += 1
 		}
-
-
-//    while (!converged && i <= numIterations) {
-//      val bcWeights = data.context.broadcast(weights)
-//      // Sample a subset (fraction miniBatchFraction) of the total data
-//      // compute and sum up the subgradients on this subset (this is one map-reduce)
-//      val wSum = data.treeAggregate(BDV(bcWeights.value.toArray))(
-//        seqOp = (c, v) => {
-//          gradient.asInstanceOf[FMGradient].computeFM(v._2, v._1, fromBreeze(c), stepSize, i, regParam)
-//        },
-//        combOp = (c1, c2) => {
-//          c1 + c2
-//        }, 7)
-//
-//      weights = Vectors.dense(wSum.toArray.map(_ / slices))
-//
-//      i += 1
-//    }
-
-    (weights, stochasticLossHistory.toArray)
-  }
-
+		(weights, stochasticLossHistory.toArray)
+	}
 }
