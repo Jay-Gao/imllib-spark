@@ -252,7 +252,7 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
 			case (i, v) =>
 				val pos = i * k2
 				for ( f <- 0 until k2) {
-					gradients(pos + i) = (sum(f) * v - weights(pos + f) * v * v) *  mult + r2 * weights(pos + f)
+					gradients(pos + f) = (sum(f) * v - weights(pos + f) * v * v) *  mult + r2 * weights(pos + f)
 				}
 		}
 		val weights_ = toBreeze(weights)

@@ -194,19 +194,7 @@ object AdaGradientDescent {
     var weights: Vector = Vectors.dense(initialWeights.toArray)
     val n = weights.size
 		//
-		var updater_ = updater match {
-			case _: SimpleUpdater =>
-				updater.asInstanceOf[SimpleUpdater]
-			case _: MomentumUpdater =>
-				updater.asInstanceOf[MomentumUpdater].initializeMomentum(n)
-			case _: AdagradUpdater =>
-				updater.asInstanceOf[AdagradUpdater].initializeSquare(n)
-			case _: RMSPropUpdater =>
-				updater.asInstanceOf[RMSPropUpdater].initializeSquare(n)
-			case _: AdamUpdater =>
-				updater.asInstanceOf[AdamUpdater].initialMomentum(n).initialSquare(n)
-		}
-
+		updater.initialize(n)
     var regVal = 0.0
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
@@ -232,18 +220,19 @@ object AdaGradientDescent {
           * lossSum is computed using the weights from the previous iteration
           * and regVal is the regularization value computed in the previous iteration as well.
           */
+				println(s"iter: $i, batch size: $miniBatchSize, train_avgloss: ${lossSum / miniBatchSize}")
         stochasticLossHistory += lossSum / miniBatchSize + regVal
 				// compute updates.
-				val update = updater_.compute(weights, fromBreeze(gradientSum / miniBatchSize.toDouble), i)
-				weights = update._1
+				val update = updater.compute(Array(toBreeze(weights)), Array(gradientSum / miniBatchSize.toDouble), i)
+				weights = fromBreeze(update._1(0))
 				regVal = update._2
 
         previousWeights = currentWeights
         currentWeights = Some(weights)
-        if (previousWeights.isDefined && currentWeights.isDefined) {
-          converged = isConverged(previousWeights.get,
-            currentWeights.get, convergenceTol)
-        }
+//        if (previousWeights.isDefined && currentWeights.isDefined) {
+//          converged = isConverged(previousWeights.get,
+//            currentWeights.get, convergenceTol)
+//        }
       } else {
         log.warn(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
       }

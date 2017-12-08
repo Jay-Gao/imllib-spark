@@ -79,22 +79,13 @@ class FFMModel(val numFeatures: Int,
 
   require(n > 0 && k > 0 && m > 0)
 
-  def radomization(l: Int, rand: Boolean): Array[Int] = {
-    val order = Array.fill(l)(0)
-    for (i <- 0 to l - 1) {
-      order(i) = i
-    }
-    if (rand) {
-      val rand = new Random()
-      for (i <- l - 1 to 1) {
-        val tmp = order(i - 1)
-        val index = rand.nextInt(i)
-        order(i - 1) = order(index)
-        order(index) = tmp
-      }
-    }
-    return order
-  }
+	def randomization(l: Int, rand: Boolean): Array[Int] = {
+		if (rand) {
+			Random.shuffle(1 to l-1).toArray[Int]
+		} else {
+			(1 until l).toArray[Int]
+		}
+	}
 
   def setOptimizer(op: String): Boolean = {
     if("sgd" == op) true else false
@@ -135,7 +126,7 @@ class FFMModel(val numFeatures: Int,
             val w1_index: Int = j1 * align1 + f2 * align0
             val w2_index: Int = j2 * align1 + f1 * align0
             val v: Double = v1 * v2 * r
-            for (d <- 0 to k - 1) {
+            for (d <- 0 until k) {
               t += weights(w1_index + d) * weights(w2_index + d) * v
             }
           }

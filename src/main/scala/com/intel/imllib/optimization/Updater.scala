@@ -17,11 +17,11 @@
 
 package com.intel.imllib.optimization
 
-import scala.math._
 import org.apache.spark.annotation.DeveloperApi
-import org.apache.spark.mllib.linalg.{Vector, Vectors}
-import breeze.linalg.{Vector=>BV, DenseVector=>BDV}
-import com.intel.imllib.util.vectorUtils._
+import breeze.linalg.{DenseVector => BDV, Vector=>BV}
+import breeze.numerics.sqrt
+
+import scala.collection.mutable.ArrayBuffer
 
 
 abstract class Updater(
@@ -31,19 +31,21 @@ abstract class Updater(
 	require(this.l2RegParam >= 0, s"Regularization parameter must be nonnegative but got ${this.l2RegParam}")
 	val epsilon = 1e-8
 
-	def setLearningRate(lr: Double): Updater = {
+	def setLearningRate(lr: Double): this.type = {
 		this.learningRate = lr
 		this
 	}
 
-	def setRegParam(regParam: Double): Updater = {
+	def setRegParam(regParam: Double): this.type = {
 		require(this.l2RegParam >= 0,
 			s"Regularization parameter must be nonnegative but got ${this.l2RegParam}")
 		this.l2RegParam = regParam
 		this
 	}
 
-	def compute(w: Vector, g: Vector, i: Int): (Vector, Double)
+	def initialize(sizes: Int*): this.type
+
+	def compute(w: Array[BV[Double]], g: Array[BV[Double]], i: Int): (Array[BV[Double]], Double)
 }
 
 
@@ -58,15 +60,22 @@ class SimpleUpdater(
 									 ) extends Updater(learningRate, l2RegParam) {
 	def this(lr: Double) = this(lr, 0.0)
 
+	override def initialize(sizes: Int*): SimpleUpdater.this.type = this
+
 	override def compute(
-							 weightsOld: Vector,
-							 gradients: Vector,
+							 weightsOld: Array[BV[Double]],
+							 gradients: Array[BV[Double]],
 							 iter: Int
-						 ): (Vector, Double) = {
-		val actualGradients = toBreeze(gradients) + this.l2RegParam * toBreeze(weightsOld)
-		val weights = toBreeze(weightsOld) - this.learningRate * actualGradients
-		val regLoss = if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * (toBreeze(weightsOld) :* toBreeze(weightsOld)).sum
-		(fromBreeze(weights), regLoss)
+						 ): (Array[BV[Double]], Double) = {
+		require(weightsOld.length == gradients.length)
+		val weights = new Array[BV[Double]](weightsOld.length)
+		var regLoss = 0.0
+		for (i <- weightsOld.indices) {
+			val actualGradients = gradients(i) + this.l2RegParam * weightsOld(i)
+			weights(i) = weightsOld(i) - this.learningRate * actualGradients
+			regLoss += (if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * weightsOld(i).dot(weightsOld(i)))
+		}
+		(weights, regLoss)
 	}
 }
 
@@ -82,35 +91,42 @@ class MomentumUpdater(
 											 private var gamma: Double,
 											 private var l2RegParam: Double
 										 ) extends Updater(learningRate, l2RegParam) {
-	private var mementum: Vector = _
+	private val momentums = new ArrayBuffer[BV[Double]]()
 	def this(lr: Double, gamma: Double) = this(lr, gamma, 0.0)
 	def this(lr: Double) = this(lr, 0.9, 0.0)
 	def this() = this(0.01)
 
-	def setGamma(gamma: Double): MomentumUpdater = {
+	def setGamma(gamma: Double): this.type = {
 		this.gamma = gamma
 		this
 	}
 
-	def initializeMomentum(N: Int): MomentumUpdater = {
-		this.mementum = Vectors.zeros(N)
+	def initialize(sizes: Int*): this.type = {
+		sizes.foreach {
+			s =>
+				val momentum = BV.zeros[Double](s)
+				this.momentums.append(momentum)
+		}
 		this
 	}
 
 	override def compute(
-							 weightsOld: Vector,
-							 gradients: Vector,
+							 weightsOld: Array[BV[Double]],
+							 gradients: Array[BV[Double]],
 							 iter: Int
-						 ): (Vector, Double) = {
-		val actualGradients = toBreeze(gradients) + this.l2RegParam * toBreeze(weightsOld)
-		val accum = this.gamma * toBreeze(this.mementum) + this.learningRate * actualGradients
-		val weights = toBreeze(weightsOld) - accum
-		this.mementum = fromBreeze(accum)
-		val regLoss = if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * (toBreeze(weightsOld) :* toBreeze(weightsOld)).sum
-		(fromBreeze(weights), regLoss)
+						 ): (Array[BV[Double]], Double) = {
+		require(weightsOld.length == gradients.length)
+		val weights = new Array[BV[Double]](weightsOld.length)
+		var regLoss = 0.0
+		for (i <- weightsOld.indices) {
+			val actualGradients = gradients(i) + this.l2RegParam * weightsOld(i)
+			this.momentums(i) = this.gamma * this.momentums(i) + this.learningRate * actualGradients
+			weights(i) = weightsOld(i) - this.momentums(i)
+			regLoss += (if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * weightsOld(i).dot(weightsOld(i)))
+		}
+		(weights, regLoss)
 	}
 }
-
 
 /**
 	* :: DeveloperApi ::
@@ -125,27 +141,34 @@ class AdagradUpdater(
 											private var learningRate: Double,
 											private var l2RegParam: Double
 										) extends Updater(learningRate, l2RegParam) {
-	private var square: Vector = _
+	private val squares = new ArrayBuffer[BV[Double]]()
 	def this(lr: Double) = this(0.1, 0.0)
 	def this() = this(0.1)
 
-	def initializeSquare(N: Int): AdagradUpdater = {
-		this.square = Vectors.zeros(N)
+	def initialize(sizes: Int*): this.type = {
+		sizes.foreach {
+			s =>
+				val square = BV.zeros[Double](s)
+				this.squares.append(square)
+		}
 		this
 	}
 
 	override def compute(
-												weightsOld: Vector,
-											 	gradients: Vector,
-											 	iter: Int
-											): (Vector, Double) = {
-		val actualGradients = toBreeze(gradients) + this.l2RegParam * toBreeze(weightsOld)
-		val accum = toBreeze(this.square) + actualGradients :* actualGradients
-		val sqrtHistGrad = accum.map(k => sqrt(k + this.epsilon))
-		val weights = toBreeze(weightsOld) - this.learningRate * (actualGradients :/ sqrtHistGrad)
-		this.square = fromBreeze(accum)
-		val regLoss = if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * (toBreeze(weightsOld) :* toBreeze(weightsOld)).sum
-		(fromBreeze(weights), regLoss)
+												weightsOld: Array[BV[Double]],
+												gradients: Array[BV[Double]],
+												iter: Int
+											): (Array[BV[Double]], Double) = {
+		require(weightsOld.length == gradients.length)
+		val weights = new Array[BV[Double]](weightsOld.length)
+		var regLoss = 0.0
+		for (i <- weightsOld.indices) {
+			val actualGradients = gradients(i) + this.l2RegParam * weightsOld(i)
+			this.squares(i) = this.squares(i) + actualGradients * actualGradients
+			weights(i) = weightsOld(i) - this.learningRate * (actualGradients / sqrt(this.squares(i) + this.epsilon))
+			regLoss += (if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * weightsOld(i).dot(weightsOld(i)))
+		}
+		(weights, regLoss)
 	}
 }
 
@@ -164,7 +187,7 @@ class RMSPropUpdater(
 											private var gamma: Double,
 											private var l2RegParam: Double
 										) extends Updater(learningRate, l2RegParam) {
-	private var square: Vector = _
+	private val squares = new ArrayBuffer[BV[Double]]()
 	def this(lr: Double, gamma: Double) = this(lr, gamma, 0.0)
 	def this(lr: Double) = this(lr, 0.999, 0.0)
 	def this() = this(0.1)
@@ -174,23 +197,30 @@ class RMSPropUpdater(
 		this
 	}
 
-	def initializeSquare(N: Int): RMSPropUpdater = {
-		this.square = Vectors.zeros(N)
+	def initialize(sizes: Int*): this.type = {
+		sizes.foreach {
+			s =>
+				val square = BV.zeros[Double](s)
+				this.squares.append(square)
+		}
 		this
 	}
 
 	override def compute(
-												weightsOld: Vector,
-												gradients: Vector,
+												weightsOld: Array[BV[Double]],
+												gradients: Array[BV[Double]],
 												iter: Int
-											): (Vector, Double) = {
-		val actualGradients = toBreeze(gradients) + this.l2RegParam * toBreeze(weightsOld)
-		val accum = this.gamma * toBreeze(this.square) + (1-this.gamma) * (actualGradients :* actualGradients)
-		val sqrtHistGrad = accum.map(k => sqrt(k + this.epsilon))
-		val weights = toBreeze(weightsOld) - this.learningRate * (actualGradients :/ sqrtHistGrad)
-		this.square = fromBreeze(accum)
-		val regLoss = if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * (toBreeze(weightsOld) :* toBreeze(weightsOld)).sum
-		(fromBreeze(weights), regLoss)
+											): (Array[BV[Double]], Double) = {
+		require(weightsOld.length == gradients.length)
+		val weights = new Array[BV[Double]](weightsOld.length)
+		var regLoss = 0.0
+		for (i <- weightsOld.indices) {
+			val actualGradients = gradients(i) + this.l2RegParam * weightsOld(i)
+			this.squares(i) = this.gamma * this.squares(i) + (1 - this.gamma) * (actualGradients * actualGradients)
+			weights(i) = weightsOld(i) - this.learningRate * (actualGradients / sqrt(this.squares(i) + this.epsilon))
+			regLoss += (if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * weightsOld(i).dot(weightsOld(i)))
+		}
+		(weights, regLoss)
 	}
 }
 
@@ -214,8 +244,8 @@ class AdamUpdater(
 									 private var beta2: Double=0.999,
 									 private var l2RegParam: Double=0.0
 								 ) extends Updater(learningRate, l2RegParam) {
-	private var momentum: BV[Double] = _
-	private var square: BV[Double] = _
+	private val momentums = new ArrayBuffer[BV[Double]]()
+	private val squares = new ArrayBuffer[BV[Double]]()
 	private var beta1Power = this.beta1
 	private var beta2Power = this.beta2
 	def this(lr: Double, beta1: Double, beta2: Double) = this(lr, beta1, beta2, 0.0)
@@ -233,35 +263,38 @@ class AdamUpdater(
 		this
 	}
 
-	def initialMomentum(N: Int): AdamUpdater = {
-		this.momentum = BDV.zeros[Double](N)
-		this
-	}
-
-	def initialSquare(N: Int): AdamUpdater = {
-		this.square = BDV.zeros[Double](N)
+	def initialize(sizes: Int*): this.type = {
+		sizes.foreach {
+			s =>
+				this.squares.append(BV.zeros[Double](s))
+				this.momentums.append(BV.zeros[Double](s))
+		}
 		this
 	}
 
 	override def compute(
-												weightsOld: Vector,
-												gradients: Vector,
+												weightsOld: Array[BV[Double]],
+												gradients: Array[BV[Double]],
 												iter: Int
-											): (Vector, Double) = {
-		val actualGradients = toBreeze(gradients) + this.l2RegParam * toBreeze(weightsOld)
-		val momentum_t = this.beta1 * this.momentum + (1 - this.beta2) * actualGradients
-		val square_t = this.beta2 * this.square + (1 - this.beta2) * (actualGradients :* actualGradients)
-		val momentum_t_ = momentum_t / (1 - this.beta1Power)
-		val square_t_ = square_t / (1 - this.beta2Power)
-		val sqrtHistGrad = square_t_.map(k => sqrt(k + this.epsilon))
-		val weights = toBreeze(weightsOld) - this.learningRate * (momentum_t_ :/ sqrtHistGrad)
-		val regLoss = if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * (toBreeze(weightsOld) :* toBreeze(weightsOld)).sum
-		this.square = square_t
-		this.momentum = momentum_t
+											): (Array[BV[Double]], Double) = {
+		require(weightsOld.length == gradients.length)
+		val weights = new Array[BV[Double]](weightsOld.length)
+		var regLoss = 0.0
+		for (i <- weightsOld.indices) {
+			val actualGradients = gradients(i) + this.l2RegParam * weightsOld(i)
+			this.momentums(i) = this.beta1 * this.momentums(i) + (1 - this.beta2) * actualGradients
+			this.squares(i) = this.beta2 * this.squares(i) + (1 - this.beta2) * (actualGradients * actualGradients)
+			val momentum_t = this.momentums(i) / (1 - this.beta1Power)
+			val square_t = this.squares(i) / (1 - this.beta2Power)
+			weights(i) = weightsOld(i) - this.learningRate * (momentum_t / sqrt(square_t + this.epsilon))
+			regLoss += (if (this.l2RegParam == 0) 0 else 0.5 * this.l2RegParam * weightsOld(i).dot(weightsOld(i)))
+
+		}
 		this.beta1Power *= this.beta1
 		this.beta2Power *= this.beta2
-		(fromBreeze(weights), regLoss)
+		(weights, regLoss)
 	}
 }
+
 
 

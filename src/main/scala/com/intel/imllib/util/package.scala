@@ -19,20 +19,18 @@ package com.intel.imllib
 
 import breeze.linalg.norm
 import org.apache.spark.mllib.linalg.Vector
-import breeze.linalg.{DenseVector=>BDV}
+import breeze.linalg.{Vector=>BV, Matrix=>BM, DenseVector=>BDV, DenseMatrix=>BDM}
 
 package object util {
-	def isConverged(previousWeights: Vector,
-													currentWeights: Vector,
-													convergenceTol: Double): Boolean = {
-		// To compare with convergence tolerance.
-		val previousBDV = new BDV[Double](previousWeights.toDense.values)
-		val currentBDV = new BDV[Double](currentWeights.toDense.values)
 
-		val a = previousWeights.toDense
-		// This represents the difference of updated weights in the iteration.
-		val solutionVecDiff: Double = norm(previousBDV - currentBDV)
+	type FFM_PARAM = (BV[Double], BM[Double])
+	type FFM_DENSE_PARAM = (BDV[Double], BDM[Double])
 
-		solutionVecDiff < convergenceTol * Math.max(norm(currentBDV), 1.0)
+	def isConverged(previousWeights: BV[Double],
+				currentWeights: BV[Double],
+				convergenceTol: Double): Boolean = {
+		val diff: Double = norm(previousWeights - currentWeights)
+		diff < convergenceTol * math.max(norm(currentWeights), 1.0)
 	}
+
 }

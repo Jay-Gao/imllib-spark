@@ -57,20 +57,26 @@ object FMExample extends App {
     val (training, testing) = (splits(0), splits(1))
 
 		val trainer = new FMTrainer(task = 1, dim = (true, false, args(4).toInt), regParams = (0, 0.0, 0.01)).setInitStd(0.01)
-		Array(new MomentumUpdater(0.1)).foreach {
+		Array(new AdamUpdater(0.001)).foreach {
 //		Array(new SimpleUpdater(0.1), new MomentumUpdater(0.1, 0.9), new AdagradUpdater(0.1)).foreach {
 			updater =>
 				trainer.optimizer
 					.setUpdater(updater.setRegParam(0.0))
-			  	.setNumIterations(5)
-			  	.setMiniBatchFraction(0.5)
+			  	.setNumIterations(20)
+			  	.setMiniBatchFraction(1.0)
 
 				val model = trainer.train(training)
 				val scores: RDD[(Int, Int)] = model.predict(testing.map(_.features)).map(x => if(x >= 0.5) 1 else -1).zip(testing.map(_.label.toInt))
 				val accuracy = scores.filter(x => x._1 == x._2).count().toDouble / scores.count()
 				println(s"accuracy = $accuracy")
-				model.save(sc, "data/fm1")
 		}
+//		val fm1: FMModel = FMWithSGD.train(training, task = 1, numIterations
+//				= args(2).toInt, stepSize = args(3).toDouble, dim = (false, true, args(4).toInt), regParam = (0, 0.0, 0.01), initStd = 0.01)
+//
+//		val scores: RDD[(Int, Int)] = fm1.predict(testing.map(_.features)).map(x => if(x >= 0.5) 1 else -1).zip(testing.map(_.label.toInt))
+//		val accuracy = scores.filter(x => x._1 == x._2).count().toDouble / scores.count()
+//
+//		println(s"accuracy = $accuracy")
     sc.stop()
   }
 }

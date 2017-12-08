@@ -30,7 +30,7 @@ import scala.collection.mutable.ArrayBuffer
 
 class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
 								 val numFeatures: Int, val min: Double, val max: Double,
-								 val r0: Double, val r1: Double, val r2: Double) extends Gradient {
+								 val r0: Double, val r1: Double, val r2: Double) extends Serializable {
 
 	def this() = this(0, false, false, 4, -1, Double.MinValue, Double.MaxValue, 0, 0, 0)
 
@@ -64,7 +64,7 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
 		(pred, sum)
 	}
 
-	override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
+	def compute(data: Vector, label: Double, weights: Vector): (BDV[Double], BDV[Double], Double) = {
 		val (pred, sum) = predict(data, weights)
 		val mult = task match {
 			case 0 =>
@@ -73,15 +73,19 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
 				-label * (1.0 - 1.0 / (1.0 + Math.exp(-label * pred)))
 		}
 		val len = weights.size
-		val gradients = new Array[Double](len)
+//		val gradients = new Array[Double](len)
+		val gradients = BDV.zeros[Double](len)
+		val counter = BDV.zeros[Double](len)
 		if (k0) {
 			gradients(len - 1) = mult + r0 * weights(len - 1)
+			counter(len - 1) = 1.0
 		}
 		if (k1) {
 			val pos = numFeatures * k2
 			data.foreachActive {
 				case (i, v) =>
 					gradients(pos + i) = v * mult + r1 * weights(pos + i)
+					counter(pos + i) = 1.0
 			}
 		}
 		data.foreachActive {
@@ -89,6 +93,7 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
 				val pos = i * k2
 				for ( f <- 0 until k2) {
 					gradients(pos + f) = (sum(f) * v - weights(pos + f) * v * v) *  mult + r2 * weights(pos + f)
+					counter(pos + f) = 1.0
 				}
 		}
 		val weights_ = toBreeze(weights)
@@ -102,11 +107,7 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
 			case 1 =>
 				math.log(1 + math.exp(-label * pred))
 		}
-		(Vectors.dense(gradients), loss)
-	}
-
-	override def compute(data: Vector, label: Double, weights: Vector, cumGradient: Vector): Double = {
-		throw new Exception("Not Defined.")
+		(gradients, counter, loss)
 	}
 }
 
@@ -208,18 +209,7 @@ object FMOptimizer {
 		val n = weights.size
 		val slices = data.getNumPartitions
 
-		var updater_ = updater match {
-			case _: SimpleUpdater =>
-				updater.asInstanceOf[SimpleUpdater]
-			case _: MomentumUpdater =>
-				updater.asInstanceOf[MomentumUpdater].initializeMomentum(n)
-			case _: AdagradUpdater =>
-				updater.asInstanceOf[AdagradUpdater].initializeSquare(n)
-			case _: RMSPropUpdater =>
-				updater.asInstanceOf[RMSPropUpdater].initializeSquare(n)
-			case _: AdamUpdater =>
-				updater.asInstanceOf[AdamUpdater].initialMomentum(n).initialSquare(n)
-		}
+		updater.initialize(n)
 
 		var converged = false // indicates whether converged based on convergenceTol
 		var i = 1
@@ -228,16 +218,16 @@ object FMOptimizer {
 			val bcWeights = data.context.broadcast(weights)
 			// Sample a subset (fraction miniBatchFraction) of the total data
 			// compute and sum up the subgradients on this subset (this is one map-reduce)
-			val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
-				.treeAggregate((BDV.zeros[Double](n), 0.0, 0L))(
+			val (gradientSum, count, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
+				.treeAggregate((BDV.zeros[Double](n), BDV.zeros[Double](n), 0.0, 0L))(
 					seqOp = (c, v) => {
-						// c: (grad, loss, count), v: (label, features)
-						val (grad, loss) = gradient.compute(v._2, v._1, bcWeights.value)
-						(c._1 + toBreeze(grad), c._2 + loss, c._3 + 1)
+						// c: (grad, grad_count, loss, sample_count), v: (label, features)
+						val (grad, grad_c, loss) = gradient.compute(v._2, v._1, bcWeights.value)
+						(c._1 + grad, c._2 + grad_c, c._3 + loss, c._4 + 1)
 					},
 					combOp = (c1, c2) => {
 						// c: (grad, loss, count)
-						(c1._1 + c2._1, c1._2 + c2._2, c1._3 + c2._3)
+						(c1._1 + c2._1, c1._2 + c2._2, c1._3 + c2._3, c1._4 + c2._4)
 					})
 
 			if (miniBatchSize > 0) {
@@ -246,18 +236,17 @@ object FMOptimizer {
 					* and regVal is the regularization value computed in the previous iteration as well.
 					*/
 				println(s"iter: $i, batch size: $miniBatchSize, train_avgloss: ${lossSum / miniBatchSize}")
-
 				stochasticLossHistory += lossSum / miniBatchSize
 				// compute updates.
-				val update = updater_.compute(weights, fromBreeze(gradientSum / miniBatchSize.toDouble), i)
-				weights = update._1
+				val update = updater.compute(Array(toBreeze(weights)), Array(gradientSum / (count + 1e-5)), i)
+				weights = fromBreeze(update._1(0))
 
 				previousWeights = currentWeights
 				currentWeights = Some(weights)
-				if (previousWeights.isDefined && currentWeights.isDefined) {
-					converged = isConverged(previousWeights.get,
-						currentWeights.get, convergenceTol)
-				}
+//				if (previousWeights.isDefined && currentWeights.isDefined) {
+//					converged = isConverged(previousWeights.get,
+//						currentWeights.get, convergenceTol)
+//				}
 			} else {
 				log.warn(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
 			}
