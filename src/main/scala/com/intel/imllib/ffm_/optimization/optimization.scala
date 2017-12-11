@@ -67,30 +67,34 @@ class FFMGradient(task: Int,
 	}
 
 	def compute(data: (Double, Array[(Int, Int, Double)]),
-							weights: FFM_DENSE_PARAM): (FFM_PARAM, FFM_PARAM, Double) = {
+							weights: FFM_DENSE_PARAM,
+							cumGradients: FFM_DENSE_PARAM,
+							cumCounter: FFM_DENSE_PARAM): Double = {
 		val (label, feature) = data
 		val (w, v) = weights
 		val score: Double = calculateScore(feature, weights)
 		val kappa = if (task == 0) score - label else -label / (1 + math.exp(label * score))
-		val wGradients = BDV.zeros[Double](w.length)
-		val wCounter = BDV.zeros[Double](w.length)
-//		val vGradients = new BSM.Builder[Double](v.rows, v.cols)
-//		val vCounter = BSM.zeros[Double](v.rows, v.cols)
-		val vGradients = BDM.zeros[Double](v.rows, v.cols)
-		val vCounter = BDM.zeros[Double](v.rows, v.cols)
+		val (wGradients, vGradients) = cumGradients
+		val (wCounter, vCounter) = cumCounter
+//		val wGradients = BDV.zeros[Double](w.length)
+//		val wCounter = BDV.zeros[Double](w.length)
+////		val vGradients = new BSM.Builder[Double](v.rows, v.cols)
+////		val vCounter = BSM.zeros[Double](v.rows, v.cols)
+//		val vGradients = BDM.zeros[Double](v.rows, v.cols)
+//		val vCounter = BDM.zeros[Double](v.rows, v.cols)
 
 		var loss: Double = 0
 
 		if (k0) {
-			wGradients(-1) = kappa + r0 * w(-1)
-			wCounter(-1) = 1.0
+			wGradients(-1) += kappa + r0 * w(-1)
+			wCounter(-1) += 1.0
 			loss += r0 * w(-1) * w(-1)
 		}
 		if (k1) {
 			feature.foreach {
 				case (_, j, x) =>
-					wGradients(j) = kappa * x + r0 * w(j)
-					wCounter(j) = 1.0
+					wGradients(j) += kappa * x + r0 * w(j)
+					wCounter(j) += 1.0
 			}
 			loss += r1 * w(0 to -1).dot(w(0 to -1))
 		}
@@ -109,17 +113,21 @@ class FFMGradient(task: Int,
 //				}
 //			}
 //		}
-
+		var _vCountIndex = Set[Int]()
 		for (p <- 0 until feature.length) {
 			val (f1, j1, x1) = feature(p)
 			for (q <- p + 1 until feature.length) {
 				val (f2, j2, x2) = feature(q)
 				vGradients(::, j1 * f + f2) :+= v(::, j2 * f + f1) * kappa * x1 * x2 + v(::, j1 * f + f2) * r2
 				vGradients(::, j2 * f + f1) :+= v(::, j1 * f + f2) * kappa * x1 * x2 + v(::, j2 * f + f1) * r2
-				vCounter(::, j1 * f + f2) := BDV.ones[Double](k2)
-				vCounter(::, j2 * f + f1) := BDV.ones[Double](k2)
+				_vCountIndex += (j1 * f + f2, j2 * f + f1)
+//				vCounter(::, j1 * f + f2) := 1.0
+//				vCounter(::, j2 * f + f1) := 1.0
 			}
 		}
+		// update counter
+		_vCountIndex.foreach(i => vCounter(::, i) :+= 1.0)
+
 		loss += r2 * sum(v :* v)
 
 		task match {
@@ -127,7 +135,7 @@ class FFMGradient(task: Int,
 			case 1 => loss +=  math.log(1 + math.exp(-label * score))
 		}
 
-		((wGradients, vGradients), (wCounter, vCounter), loss)
+		loss
 	}
 }
 
@@ -188,20 +196,17 @@ class FFMOptimizer() extends Serializable {
 		}
 
 		this.updater.setRegParam(0).initialize(sizes: _*)
-//		this.updater match {
-//			case _: FFMAdagradUpdater => this.setUpdater(this.updater.asInstanceOf[FFMAdagradUpdater].initializeSquare(sizes: _*))
-//		}
 		var converged = false
 		var iter = 1
 		while (!converged && iter < this.numIterations) {
 			val bw = data.context.broadcast(w)
 			val bv = data.context.broadcast(v)
 			val (gradientsSum, counter, loss, miniBatchSize) = data.sample(false, this.miniBatchFraction, 64 + iter)
-		  	.treeAggregate((BV.zeros[Double](w.length), BM.zeros[Double](rows, cols)),
-					(BV.zeros[Double](w.length), BM.zeros[Double](rows, cols)), 0.0, 0L)(
+		  	.treeAggregate((BDV.zeros[Double](w.length), BDM.zeros[Double](rows, cols)),
+					(BDV.zeros[Double](w.length), BDM.zeros[Double](rows, cols)), 0.0, 0L)(
 					seqOp = (x, y) => {
-						val (grad, c, l) = this.gradient.compute(y, (bw.value, bv.value))
-						((x._1._1 + grad._1, x._1._2 + grad._2), (x._2._1 + c._1, x._2._2 + c._2), x._3 + l, x._4 + 1)
+						val l = this.gradient.compute(y, (bw.value, bv.value), x._1, x._2)
+						(x._1, x._2, x._3 + l, x._4 + 1)
 					},
 					combOp = (x, y) => {
 						((x._1._1 + y._1._1, x._1._2 + y._1._2), (x._2._1 + y._2._1, x._2._2 + y._2._2), x._3 + y._3, x._4 + y._4)

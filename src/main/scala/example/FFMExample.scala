@@ -65,7 +65,7 @@ object FFMExample extends App {
 
 		val f = data.flatMap(x => x._2).map(_._1).max + 1
 		val n = data.flatMap(x => x._2).map(_._2).max + 1
-		Array(new AdamUpdater(0.001)).foreach {
+		Array(new AdagradUpdater(0.01)).foreach {
 			updater =>
 				val trainer = new FFMTrainer(1, n, f, dim = (args(5).toBoolean, args(6).toBoolean, args(1).toInt), regParams = (0.0, 0.0, args(4).toDouble))
 				trainer.optimizer.setUpdater(updater)
